@@ -21,3 +21,8 @@ logging middleware matters to whether trace headers appear in the logged request
 
 However the server logger does not apply any trace context, regardless of any
 order of application of middleware.
+
+## Desired Outcome
+
+When creating the `http4s-server-request` span, the logged request body message should
+include the Trace ID and Span ID in the MDC
