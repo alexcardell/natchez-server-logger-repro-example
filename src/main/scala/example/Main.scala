@@ -9,12 +9,12 @@ import cats.effect.IOApp
 import cats.effect.kernel.Async
 import cats.syntax.all._
 import fs2.Stream
-import natchez.Kernel
-import natchez.Span
-import natchez.Trace
-import natchez.http4s.NatchezMiddleware
-import natchez.http4s.syntax.EntryPointOps
-import natchez.log.Log
+// import natchez.Kernel
+// import natchez.Span
+// import natchez.Trace
+// import natchez.http4s.NatchezMiddleware
+// import natchez.http4s.syntax.EntryPointOps
+// import natchez.log.Log
 import org.http4s.ember.server.EmberServerBuilder
 import org.http4s.Headers
 import org.http4s.HttpRoutes
@@ -28,6 +28,10 @@ import org.typelevel.log4cats.LoggerFactory
 import org.typelevel.log4cats.slf4j.Slf4jFactory
 import org.http4s.ember.client.EmberClient
 import org.http4s.ember.client.EmberClientBuilder
+import org.typelevel.otel4s.trace.Tracer
+import org.typelevel.otel4s.Otel4s
+import org.typelevel.otel4s.sdk.OpenTelemetrySdk
+import org.http4s.otel4s.middleware.ServerMiddleware
 
 object Main extends IOApp {
 
@@ -48,17 +52,17 @@ object Main extends IOApp {
 
   object Routes {
 
-    def apply[F[_]: Monad: Trace: TracedLogger](
+    def apply[F[_]: Monad: Tracer: TracedLogger](
         client: Client[F]
     ): HttpRoutes[F] = {
       object dsl extends org.http4s.dsl.Http4sDsl[F]
       import dsl._
 
       HttpRoutes.of[F] { case GET -> Root / "operation" =>
-        Trace[F].span("route-operation") {
+        Tracer[F].span("route-operation").use { _ =>
           for {
-            _   <- Logger[F].info("log message")
-            _   <- client.get("/downstream")(_ => ().pure[F])
+            _ <- Logger[F].info("log message")
+            _ <- client.get("/downstream")(_ => ().pure[F])
             res <- Ok("success")
           } yield res
         }
@@ -73,29 +77,24 @@ object Main extends IOApp {
     val stream = {
       val loggerFactory: LoggerFactory[IO] = Slf4jFactory.create[IO]
 
-      val entrypoint = {
-        implicit val natchezLogger: Logger[IO] = loggerFactory
-          .getLoggerFromName("natchez_log")
-        Log.entryPoint[IO]("example-service", _.spaces2)
-      }
-
       for {
-        implicit0(trace: Trace[IO]) <-
-          Trace.ioTraceForEntryPoint(entrypoint).stream
+        implicit0(otel: Tracer[IO]) <- Stream
+          .resource(OpenTelemetrySdk.autoConfigured[IO]())
+          .evalMap(_.sdk.tracerProvider.get("com.tracer"))
         implicit0(logger: TracedLogger[IO]) = TracedLogger[IO](
           loggerFactory.getLogger
         )
         // client <- Stream.resource(EmberClientBuilder.default[IO].build
-        baseClient       = StubApi.client[IO]
-        clientTracing = NatchezMiddleware.client[IO](_)
-        clientLogging = 
-         ClientLogger.apply[IO](
-          true,
-          true,
-          logAction = Some(s => logger.info(s))
-        )(_)
+        baseClient = StubApi.client[IO]
+        // clientTracing = NatchezMiddleware.client[IO](_)
+        clientLogging =
+          ClientLogger.apply[IO](
+            true,
+            true,
+            logAction = Some(s => logger.info(s))
+          )(_)
 
-        client = clientTracing(clientLogging(baseClient))
+        client = clientLogging(baseClient)
         routes = Routes[IO](client)
 
         logMiddleware =
@@ -106,11 +105,12 @@ object Main extends IOApp {
           )(_)
 
         // neither order of application makes server logging apply trace IDs
-        appRoutes = logMiddleware(traceMiddleware(routes))
+        // appRoutes = logMiddleware(traceMiddleware(routes))
+        appRoutes = traceMiddleware(logMiddleware(routes))
         // end
 
         httpApp = appRoutes.orNotFound
-        server  = EmberServerBuilder.default[IO].withHttpApp(httpApp).build
+        server = EmberServerBuilder.default[IO].withHttpApp(httpApp).build
         _ <-
           Stream
             .resource(server)
@@ -122,43 +122,10 @@ object Main extends IOApp {
     stream.compile.lastOrError
   }
 
-  // using `Trace.ioTraceForEntrypoint`
-  // does not guarantee a starting span, so we must initialise,
-  // and set the parent kernel from request headers for
-  // distributed tracing
   def traceMiddleware(
       routes: HttpRoutes[IO]
-  )(implicit T: Trace[IO]): HttpRoutes[IO] = {
-
-    val tracedRoutes = NatchezMiddleware.server[IO](routes)
-
-    val unsafeHeaders =
-      EntryPointOps.ExcludedHeaders ++ Set(
-        "api-key",
-        "x-api-key",
-        "apikey",
-        "x-apikey"
-      )
-
-    def isKernelHeader(name: CIString): Boolean = !unsafeHeaders.contains(name)
-
-    def kernelFromHeaders(headers: Headers): Kernel =
-      Kernel(headers.headers.collect {
-        case h if isKernelHeader(h.name) => h.name -> h.value
-      }.toMap)
-
-    Kleisli { req =>
-      val kernel = kernelFromHeaders(req.headers)
-      val spanOptions = Span.Options.Defaults
-        .withSpanKind(Span.SpanKind.Server)
-        .withParentKernel(kernel)
-
-      OptionT {
-        Trace[IO].span("http4s-server-request", spanOptions) {
-          tracedRoutes.run(req).value
-        }
-      }
-    }
+  )(implicit T: Tracer[IO]): HttpRoutes[IO] = {
+    ServerMiddleware.default[IO].buildHttpRoutes(routes)
   }
 
   // for nice syntax in app construction

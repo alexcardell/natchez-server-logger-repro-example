@@ -1,13 +1,13 @@
 # natchez-server-logger-repro-example
 
-Example repo to demonstrate http4s server Logger middleware
-as incompatible with an otherwise effective logger that 
-applies natchez trace context as log context
+Example repo to demonstrate http4s Server Logger middleware
+is incompatible with loggers using IOLocal context, e.g. otel4s or natchez trace
+context
 
 To run:
 
 ```
-sbt 'app/run'
+env $(cat local.env) sbt run
 ```
 
 ## Issue

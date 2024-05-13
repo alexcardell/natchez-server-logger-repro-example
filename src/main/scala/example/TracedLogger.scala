@@ -3,43 +3,40 @@ package example
 import cats.Monad
 import cats.Show
 import cats.implicits._
-import natchez.Kernel
-import natchez.Trace
-import natchez.TraceValue
-import natchez.TraceValue.BooleanValue
-import natchez.TraceValue.NumberValue
-import natchez.TraceValue.StringValue
+// import natchez.Kernel
+// import natchez.Trace
+// import natchez.TraceValue
+// import natchez.TraceValue.BooleanValue
+// import natchez.TraceValue.NumberValue
+// import natchez.TraceValue.StringValue
 import org.typelevel.log4cats.SelfAwareStructuredLogger
+import org.typelevel.otel4s.trace.SpanContext
+import org.typelevel.otel4s.trace.Tracer
 
 trait TracedLogger[F[_]] extends SelfAwareStructuredLogger[F]
 
 object TracedLogger {
 
-  implicit val show: Show[TraceValue] = Show.show(tv =>
-    tv match {
-      case BooleanValue(value) => value.show
-      case NumberValue(value)  => value.floatValue.show
-      case StringValue(value)  => value.show
-    }
-  )
+  // def apply[F[_]: Monad: Tracer](
+  //     log: SelfAwareStructuredLogger[F]
+  // ): TracedLogger[F] = apply[F](log, lowerCase(_))
 
-  private def lowerCase(kernel: Kernel): Map[String, String] =
-    kernel.toHeaders.map { case (k, v) =>
-      (k.toString.toLowerCase, v.toLowerCase)
-    }
-
-  def apply[F[_]: Monad: Trace](
+  def apply[F[_]: Monad: Tracer](
       log: SelfAwareStructuredLogger[F]
-  ): TracedLogger[F] = apply[F](log, lowerCase(_))
-
-  def apply[F[_]: Monad: Trace](
-      log: SelfAwareStructuredLogger[F],
-      kernelCtx: Kernel => Map[String, String]
+      // kernelCtx: Kernel => Map[String, String]
   ): TracedLogger[F] = {
     new TracedLogger[F] {
-      val traceLog = Trace[F].kernel
-        .map(kernelCtx)
-        .map(log.addContext(_))
+      val traceLog = Tracer[F].currentSpanContext
+        .map {
+          case Some(context) =>
+            log.addContext(
+              Map(
+                "trace_id" -> context.traceIdHex,
+                "span_id" -> context.spanIdHex
+              )
+            )
+          case None => log
+        }
 
       def error(message: => String): F[Unit] = traceLog >>= (_.error(message))
 
