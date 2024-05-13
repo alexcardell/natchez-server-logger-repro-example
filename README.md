@@ -1,4 +1,4 @@
-# natchez-server-logger-repro-example
+# otel4s-server-logger-repro-example
 
 Example repo to demonstrate http4s Server Logger middleware
 is incompatible with loggers using IOLocal context, e.g. otel4s or natchez trace
