@@ -100,8 +100,8 @@ object Main extends IOApp {
 
         logMiddleware =
           ServerLogger.httpRoutes[IO](
-            false,
-            false,
+            true,
+            true,
             logAction = Some(s => logger.info(s))
           )(_)
 
