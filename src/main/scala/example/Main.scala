@@ -3,6 +3,7 @@ package example
 import cats.Monad
 import cats.data.Kleisli
 import cats.data.OptionT
+import cats.effect.Resource
 import cats.effect.ExitCode
 import cats.effect.IO
 import cats.effect.IOApp
@@ -81,26 +82,26 @@ object Main extends IOApp {
         implicit0(otel: Tracer[IO]) <- Stream
           .resource(OpenTelemetrySdk.autoConfigured[IO]())
           .evalMap(_.sdk.tracerProvider.get("com.tracer"))
+
         implicit0(logger: TracedLogger[IO]) = TracedLogger[IO](
           loggerFactory.getLogger
         )
-        // client <- Stream.resource(EmberClientBuilder.default[IO].build
+
         baseClient = StubApi.client[IO]
-        // clientTracing = NatchezMiddleware.client[IO](_)
-        clientLogging =
+
+        loggedClient =
           ClientLogger.apply[IO](
             true,
             true,
             logAction = Some(s => logger.info(s))
-          )(_)
+          )(baseClient)
 
-        client = clientLogging(baseClient)
-        routes = Routes[IO](client)
+        routes = Routes[IO](loggedClient)
 
         logMiddleware =
           ServerLogger.httpRoutes[IO](
-            true,
-            true,
+            false,
+            false,
             logAction = Some(s => logger.info(s))
           )(_)
 
@@ -127,10 +128,4 @@ object Main extends IOApp {
   )(implicit T: Tracer[IO]): HttpRoutes[IO] = {
     ServerMiddleware.default[IO].buildHttpRoutes(routes)
   }
-
-  // for nice syntax in app construction
-  implicit class FOps[F[_], A](fa: F[A]) {
-    def stream: Stream[F, A] = Stream.eval(fa)
-  }
-
 }
